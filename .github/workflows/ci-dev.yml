@@ -1,0 +1,156 @@
+name: CI-DEV
+
+on:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+
+env:
+  ARCHIVED_ARTIFACTS: quiz-app_build-artifacts.tar.gz
+
+jobs:
+  build:
+    name: "Build & Package"
+
+    runs-on: ubuntu-latest
+    outputs:
+      jobstatus: ${{ steps.status.outputs.jobstatus }}
+      
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "Setup node"
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14.20.1
+
+      - name: "[Info] Check node version"
+        run: node -v
+
+      - name: "[Info] Print working directory"
+        run: ls -al
+
+      - name: "[Build] Install dependency packages"
+        run: yarn install
+
+      - name: "[Build] Build with yarn"
+        run: yarn run build
+
+      - name: "[Info] Print build directory"
+        run: ls -al build
+
+      - id: status
+        name: "Build job status"
+        if: always()
+        run: |
+          echo ${{ job.status }}
+          echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
+          
+  slack-notify:
+    if: ${{ always() }}
+    needs: build
+    name: "Slack-notify"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "[Info] Print working directory"
+        run: |
+          ls -al
+          find .github
+          
+      - name: "[Notification] Send Slack Notifications when Previous job failed"
+        if: ${{ needs.build.outputs.jobstatus != 'success' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          slack_incoming_url: ${{ secrets.SLACK_INCOMING_URL }}
+      
+      - name: "[Notification] Send Slack Notifications when Previous job succeed"
+        if: ${{ needs.build.outputs.jobstatus == 'success' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          status: success
+          slack_incoming_url: ${{ secrets.SLACK_INCOMING_URL }}
+
+
+  deploy:
+    needs: Slack-notify
+    name: "Deploy"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "Setup node"
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14.20.1
+
+      - name: "[Info] Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: "[Info] Get image tag(verion)"
+        id: image
+        run: |
+          VERSION=\$(echo \${{ github.sha }} | cut -c1-8)
+          echo VERSION=\$VERSION
+          echo "::set-output name=version::\$VERSION"
+
+      - name: "[Info] Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: [Info] Docker Build, tag, and push image to Amazon ECR
+        id: image-info
+        env:
+          ECR_REGISTRY: \${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: quiz-app
+          IMAGE_TAG: \${{ steps.image.outputs.version }}
+        run: |
+          echo "::set-output name=ecr_repository::\$ECR_REPOSITORY"
+          echo "::set-output name=image_tag::\$IMAGE_TAG"
+          docker build -t \$ECR_REGISTRY/\$ECR_REPOSITORY:\$IMAGE_TAG .
+          docker push \$ECR_REGISTRY/\$ECR_REPOSITORY:\$IMAGE_TAG
+
+
+  jira-notify:
+    needs: deploy
+    name: "Jira-notify"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      # Jira Keys
+      - name: "[Notification] Parse Jira Keys from Commit"
+        id: jira_keys
+        if: always()
+        uses: HighwayThree/jira-extract-issue-keys@master
+        with:
+          is-pull-request: ${{ github.event_name == 'pull_request' }}
+          parse-all-commits: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Jira Deployment
+      - name: "[Notification] Push Deployment Info to Jira"
+        if: steps.jira_keys.outputs.jira-keys != ''
+        uses: rohit-gohri/jira-ci-cd-integration@v0
+        with:
+          state: ${{ env.BUILD_STATE }}
+          environment: dev
+          issue: "${{ steps.jira_keys.outputs.jira-keys }}"
+          jira_instance: shlee-mz
+          client_id: ${{ secrets.JIRA_CLIENT_ID }}
+          client_secret: ${{ secrets.JIRA_CLIENT_SECRET }}
+

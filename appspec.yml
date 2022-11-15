@@ -1,0 +1,14 @@
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /home/ec2-user/webapps/quiz
+hooks:
+  ApplicationStart:
+    - location: deploy/start_app.sh
+      timeout: 60
+      runas: ec2-user
+  ApplicationStop:
+    - location: deploy/stop_app.sh
+      timeout: 60
+      runas: ec2-user

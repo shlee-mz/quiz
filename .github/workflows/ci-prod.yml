@@ -1,0 +1,143 @@
+name: CI-PROD
+
+on:
+  pull_request:
+    branches: [ "prod" ]
+    types: [ "closed" ]
+
+env:
+  ARCHIVED_ARTIFACTS: quiz-app_prod-build-artifacts.tar.gz
+
+jobs:
+  build:
+    name: "Build & Package"
+
+    runs-on: ubuntu-latest
+    outputs:
+      jobstatus: ${{ steps.status.outputs.jobstatus }}
+      
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "Setup node"
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14.20.1
+
+      - name: "[Info] Check node version"
+        run: node -v
+
+      - name: "[Info] Print working directory"
+        run: ls -al
+
+      - name: "[Build] Install dependency packages"
+        run: yarn install
+
+      - name: "[Build] Build with yarn"
+        run: yarn run build
+
+      - name: "[Info] Print build directory"
+        run: ls -al build
+
+      - name: "[Package] Archive artifacts"
+        run: tar cfz $ARCHIVED_ARTIFACTS build deploy appspec.yml
+
+      - name: "[S3 Upload] Upload artifacts to S3 bucket"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp $ARCHIVED_ARTIFACTS \
+          --region ${{ secrets.AWS_REGION }} \
+          s3://quiz-build-artifacts
+          
+      - id: status
+        name: "Job status"
+        if: always()
+        run: |
+          echo ${{ job.status }}
+          echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
+
+
+  slack-notify:
+    if: ${{ always() }}
+    needs: build
+    name: "Slack-notify"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "[Info] Print working directory"
+        run: |
+          ls -al
+          find .github
+
+      - name: "[Notification] Send Slack Notifications when Previous job failed"
+        if: ${{ needs.build.outputs.jobstatus != 'success' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          slack_incoming_url: ${{ secrets.SLACK_INCOMING_URL }}
+      
+      - name: "[Notification] Send Slack Notifications when Previous job succeed"
+        if: ${{ needs.build.outputs.jobstatus == 'success' }}
+        uses: ./.github/actions/slack-notify
+        with:
+          status: success
+          slack_incoming_url: ${{ secrets.SLACK_INCOMING_URL }}
+
+
+  deploy:
+    needs: Slack-notify
+    name: "Deploy"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: "[Deploy] Deploy using AWS CodeDeploy"
+        run: aws deploy create-deployment 
+          --application-name quiz-app 
+          --deployment-group-name quiz-prod-deploy-group-test 
+          --deployment-config-name CodeDeployDefault.OneAtATime 
+          --s3-location bucket=quiz-build-artifacts,bundleType=tgz,key=$ARCHIVED_ARTIFACTS
+
+
+  jira-notify:
+    needs: deploy
+    name: "Jira-notify"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      # Jira Keys
+      - name: "[Notification] Parse Jira Keys from Commit"
+        id: jira_keys
+        if: always()
+        uses: HighwayThree/jira-extract-issue-keys@master
+        with:
+          is-pull-request: ${{ github.event_name == 'pull_request' }}
+          parse-all-commits: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Jira Deployment
+      - name: "[Notification] Push Deployment Info to Jira"
+        if: steps.jira_keys.outputs.jira-keys != ''
+        uses: rohit-gohri/jira-ci-cd-integration@v0
+        with:
+          state: ${{ env.BUILD_STATE }}
+          environment: production
+          issue: "${{ steps.jira_keys.outputs.jira-keys }}"
+          jira_instance: shlee-mz
+          client_id: ${{ secrets.JIRA_CLIENT_ID }}
+          client_secret: ${{ secrets.JIRA_CLIENT_SECRET }}

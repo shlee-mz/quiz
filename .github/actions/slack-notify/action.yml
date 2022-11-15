@@ -1,0 +1,23 @@
+name: 'slack-notify'
+
+inputs:
+  status:
+    required: false
+    default: 'failure'
+  slack_incoming_url:
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send to slack
+      shell: bash
+      run: |
+        if [ "${{ inputs.status }}" = "success" ]; then
+          EMOTICON="✅"
+        else
+          EMOTICON="⛔"
+        fi 
+        MSG="{ \"text\":\">${EMOTICON} GitHub Actinos workflows (<https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|${GITHUB_WORKFLOW}>) in <https://github.com/${GITHUB_REPOSITORY}|${GITHUB_REPOSITORY}>\n><https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}/checks|${GITHUB_JOB}> job ${{ inputs.status }} on branch=\`${GITHUB_REF#refs/heads/}\`\"}"
+
+        curl -s -X POST -H 'Content-type: application/json' --data "${MSG}" "${{ inputs.slack_incoming_url }}" 

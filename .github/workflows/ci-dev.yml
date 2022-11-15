@@ -80,7 +80,9 @@ jobs:
   deploy:
     needs: Slack-notify
     name: "Deploy"
-
+    outputs:
+      version: ${{ steps.image.outputs.version }}
+ 
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout Source Control"
@@ -108,8 +110,7 @@ jobs:
         run: |
           VERSION=$(echo ${{ github.sha }} | cut -c1-8)
           echo VERSION=$VERSION
-          echo "name=version::$VERSION"
-          echo "version=${{ $VERSION }}" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
         id: image-info

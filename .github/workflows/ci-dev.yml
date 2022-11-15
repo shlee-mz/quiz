@@ -91,9 +91,18 @@ jobs:
         with:
           node-version: 14.20.1
 
+      - name: "[Info] Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: "[Info] Login to Amazon ECR"
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+        with:
+          registry-type: public
 
       - name: "[Info] Get image tag(verion)"
         id: image
@@ -101,13 +110,6 @@ jobs:
           VERSION=\$(echo \${{ github.sha }} | cut -c1-8)
           echo VERSION=\$VERSION
           echo "::set-output name=version::\$VERSION"
-
-      - name: "[Info] Configure AWS credentials"
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
         id: image-info

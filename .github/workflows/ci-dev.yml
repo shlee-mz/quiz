@@ -109,7 +109,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: [Info] Docker Build, tag, and push image to Amazon ECR
+      - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
         id: image-info
         env:
           ECR_REGISTRY: \${{ steps.login-ecr.outputs.registry }}

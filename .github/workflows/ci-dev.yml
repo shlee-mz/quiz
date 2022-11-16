@@ -7,7 +7,7 @@ on:
     branches: [ "dev" ]
 
 env:
-  ARCHIVED_ARTIFACTS: quiz-app_build-artifacts.tar.gz 
+  ARCHIVED_ARTIFACTS: quiz-app_build-artifacts.tar.gz
 
 jobs:
   build:
@@ -41,12 +41,25 @@ jobs:
       - name: "[Info] Print build directory"
         run: ls -al build
 
+      - name: "[Package] Archive artifacts"
+        run: tar cfz $ARCHIVED_ARTIFACTS build deploy appspec.yml
+
+      - name: "[S3 Upload] Upload artifacts to S3 bucket"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp $ARCHIVED_ARTIFACTS \
+          --region ${{ secrets.AWS_REGION }} \
+          s3://quiz-build-artifacts
+          
       - id: status
-        name: "Build job status"
+        name: "Job status"
         if: always()
         run: |
           echo ${{ job.status }}
           echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
+          
           
   slack-notify:
     if: ${{ always() }}
@@ -80,49 +93,22 @@ jobs:
   deploy:
     needs: Slack-notify
     name: "Deploy"
-    outputs:
-      version: ${{ steps.image.outputs.version }}
- 
+
     runs-on: ubuntu-latest
     steps:
-      - name: "Checkout Source Control"
-        uses: actions/checkout@v3
-
-      - name: "Setup node"
-        uses: actions/setup-node@v3
-        with:
-          node-version: 14.20.1
-
-      - name: "[Info] Configure AWS credentials"
+      - name: "Configure AWS credentials"
         uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-
-      - name: "[Info] Login to Amazon ECR"
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: "[Info] Get image tag(verion)"
-        id: image
-        run: |
-          VERSION=$(echo ${{ github.sha }} | cut -c1-8)
-          echo VERSION=$VERSION
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
-        id: image-info
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: quiz-app
-          IMAGE_TAG: ${{ steps.image.outputs.version }}
-        run: |
-          echo "name=ecr_repository::$ECR_REPOSITORY"
-          echo "name=image_tag::$IMAGE_TAG"
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: "[Deploy] Deploy using AWS CodeDeploy"
+        run: aws deploy create-deployment 
+          --application-name quiz-app 
+          --deployment-group-name quiz-dev-deploy-group-test 
+          --deployment-config-name CodeDeployDefault.OneAtATime 
+          --s3-location bucket=quiz-build-artifacts,bundleType=tgz,key=$ARCHIVED_ARTIFACTS
 
 
   jira-notify:

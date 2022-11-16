@@ -41,11 +41,10 @@ jobs:
       - name: "[Info] Get image tag(verion)"
         id: image
         run: |
-          #VERSION=$(echo ${{ github.sha }} | cut -c1-8)
           LAST_COMMIT_SHA=$(git rev-parse --short HEAD)
 
           echo VERSION=$LAST_COMMIT_SHA
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$LAST_COMMIT_SHA" >> $GITHUB_OUTPUT
 
       - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
         id: image-info

@@ -10,13 +10,6 @@ jobs:
     name: "Docker Build & Push image"
 
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.image.outputs.version }}
-      jobstatus: ${{ steps.status.outputs.jobstatus }}
-      ecr_registry: ${{ steps.image-info.outputs.ecr_registry }}
-      ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
-      image_tag: ${{ steps.image-info.outputs.image_tag }}
-
     steps:
       - name: "Checkout Source Control"
         uses: actions/checkout@v3
@@ -62,6 +55,13 @@ jobs:
           echo ${{ job.status }}
           echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
 
+    outputs:
+      version: ${{ steps.image.outputs.version }}
+      jobstatus: ${{ steps.status.outputs.jobstatus }}
+      ecr_registry: ${{ steps.image-info.outputs.ecr_registry }}
+      ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
+      image_tag: ${{ steps.image-info.outputs.image_tag }}
+
 
   slack-notify:
     if: ${{ always() }}
@@ -93,8 +93,8 @@ jobs:
 
 
   deploy:
-    needs: slack-notify
-    name: "Update K8s manifest"
+    needs: [ build, slack-notify ]
+    name: "Update K8s manifests"
 
     runs-on: ubuntu-latest
     steps:

@@ -42,7 +42,6 @@ jobs:
         run: |
           echo "name=ecr_repository::$ECR_REPOSITORY"
           echo "name=image_tag::$IMAGE_TAG"
-          echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
           echo "ecr_repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
@@ -54,11 +53,11 @@ jobs:
         run: |
           echo ${{ job.status }}
           echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
-
+          
     outputs:
       version: ${{ steps.image.outputs.version }}
       jobstatus: ${{ steps.status.outputs.jobstatus }}
-      ecr_registry: ${{ steps.image-info.outputs.ecr_registry }}
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
       ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
       image_tag: ${{ steps.image-info.outputs.image_tag }}
 

@@ -57,7 +57,6 @@ jobs:
     outputs:
       version: ${{ steps.image.outputs.version }}
       jobstatus: ${{ steps.status.outputs.jobstatus }}
-      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
       ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
       image_tag: ${{ steps.image-info.outputs.image_tag }}
 
@@ -103,12 +102,16 @@ jobs:
       - name: "Setup Kustomize"
         uses: imranismail/setup-kustomize@v1
 
-      - name: "Configure AWS credentials"
+      - name: "[Info] Configure AWS credentials"
         uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: "[Info] Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
       # AWS CLI credential helper
       # https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html
@@ -127,11 +130,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           REPOSITORY_NAME: k8s-gitops-quiz-app
         run: |
-          echo ${{ needs.build.outputs.ecr_registry }}
+          echo ${{ steps.login-ecr.outputs.registry }}
           echo ${{ needs.build.outputs.ecr_repository }}
           echo ${{ needs.build.outputs.image_tag }}
           cd $REPOSITORY_NAME/overlays/prod
-          kustomize edit set image ${{ needs.build.outputs.ecr_registry }}/${{ needs.build.outputs.ecr_repository }}:${{ needs.build.outputs.image_tag }}
+          kustomize edit set image ${{ steps.login-ecr.outputs.registry }}/${{ needs.build.outputs.ecr_repository }}:${{ needs.build.outputs.image_tag }}
           cat kustomization.yaml
 
       - name: "[INFO] Git Commit and Push to GitOps repository"

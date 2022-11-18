@@ -7,26 +7,20 @@ on:
 
 jobs:
   build:
-    name: "Docker Build & Push"
+    name: "Docker Build & Push image"
 
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.image.outputs.version }}
       jobstatus: ${{ steps.status.outputs.jobstatus }}
-      
+      ecr_registry: ${{ steps.image-info.outputs.ecr_registry }}
+      ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
+      image_tag: ${{ steps.image-info.outputs.image_tag }}
+
     steps:
       - name: "Checkout Source Control"
         uses: actions/checkout@v3
 
-      - name: "Setup node"
-        uses: actions/setup-node@v3
-        with:
-          node-version: 14.20.1
-
-      - name: "[Info] Check node version"
-        run: node -v
-
-      # AWS Work
       - name: "[Info] Configure AWS credentials"
         uses: aws-actions/configure-aws-credentials@v1
         with:
@@ -55,9 +49,12 @@ jobs:
         run: |
           echo "name=ecr_repository::$ECR_REPOSITORY"
           echo "name=image_tag::$IMAGE_TAG"
+          echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+          echo "ecr_repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
+          
       - id: status
         name: "Job status"
         if: always()
@@ -95,8 +92,62 @@ jobs:
           slack_incoming_url: ${{ secrets.SLACK_INCOMING_URL }}
 
 
-  jira-notify:
+  deploy:
     needs: slack-notify
+    name: "Update K8s manifest"
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "Setup Kustomize"
+        uses: imranismail/setup-kustomize@v1
+
+      - name: "Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # AWS CLI credential helper
+      # https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html
+      - name: "[INFO] Checkout GitOps Repository (CodeCommit)"
+        env:
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          aws --version
+          aws codecommit get-repository --repository-name $REPOSITORY_NAME --region ${{ secrets.AWS_REGION }}
+          git config --global credential.helper '!aws codecommit credential-helper $@'
+          git config --global credential.UseHttpPath true
+          git clone https://git-codecommit.${{ secrets.AWS_REGION }}.amazonaws.com/v1/repos/$REPOSITORY_NAME
+
+      - name: "[INFO] Update Kubernetes resources"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          echo ${{ needs.build.outputs.ecr_registry }}
+          echo ${{ needs.build.outputs.ecr_repository }}
+          echo ${{ needs.build.outputs.image_tag }}
+          cd $REPOSITORY_NAME/overlays/prod
+          kustomize edit set image ${{ needs.build.outputs.ecr_registry }}/${{ needs.build.outputs.ecr_repository }}:${{ needs.build.outputs.image_tag }}
+          cat kustomization.yaml
+
+      - name: "[INFO] Git Commit and Push to GitOps repository"
+        env:
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          cd $REPOSITORY_NAME
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "github-actions"
+          git commit -am "Update image tag from GitHub Actions"
+          git push -u origin master
+
+
+  jira-notify:
+    needs: deploy
     name: "Jira-notify"
 
     runs-on: ubuntu-latest
@@ -126,3 +177,4 @@ jobs:
           jira_instance: shlee-mz
           client_id: ${{ secrets.JIRA_CLIENT_ID }}
           client_secret: ${{ secrets.JIRA_CLIENT_SECRET }}
+          

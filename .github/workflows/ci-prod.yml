@@ -115,7 +115,7 @@ jobs:
 
       # AWS CLI credential helper
       # https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html
-      - name: "[INFO] Checkout GitOps Repository (CodeCommit)"
+      - name: "[Info] Checkout GitOps Repository (CodeCommit)"
         env:
           REPOSITORY_NAME: k8s-gitops-quiz-app
         run: |
@@ -125,7 +125,7 @@ jobs:
           git config --global credential.UseHttpPath true
           git clone https://git-codecommit.${{ secrets.AWS_REGION }}.amazonaws.com/v1/repos/$REPOSITORY_NAME
 
-      - name: "[INFO] Update Kubernetes resources"
+      - name: "[Info] Update Kubernetes resources"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           REPOSITORY_NAME: k8s-gitops-quiz-app
@@ -137,7 +137,7 @@ jobs:
           kustomize edit set image ${{ steps.login-ecr.outputs.registry }}/${{ needs.build.outputs.ecr_repository }}:${{ needs.build.outputs.image_tag }}
           cat kustomization.yaml
 
-      - name: "[INFO] Git Commit and Push to GitOps repository"
+      - name: "[Info] Git Commit and Push to GitOps repository"
         env:
           REPOSITORY_NAME: k8s-gitops-quiz-app
         run: |

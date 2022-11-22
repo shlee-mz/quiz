@@ -5,52 +5,47 @@ on:
     branches: [ "prod" ]
     types: [ "closed" ]
 
-env:
-  ARCHIVED_ARTIFACTS: quiz-app_prod-build-artifacts.tar.gz
-
 jobs:
   build:
-    name: "Build & Package"
+    name: "Docker Build & Push image"
 
     runs-on: ubuntu-latest
-    outputs:
-      jobstatus: ${{ steps.status.outputs.jobstatus }}
-      
     steps:
       - name: "Checkout Source Control"
         uses: actions/checkout@v3
 
-      - name: "Setup node"
-        uses: actions/setup-node@v3
+      - name: "[Info] Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v1
         with:
-          node-version: 14.20.1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: "[Info] Check node version"
-        run: node -v
+      - name: "[Info] Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: "[Info] Print working directory"
-        run: ls -al
-
-      - name: "[Build] Install dependency packages"
-        run: yarn install
-
-      - name: "[Build] Build with yarn"
-        run: yarn run build
-
-      - name: "[Info] Print build directory"
-        run: ls -al build
-
-      - name: "[Package] Archive artifacts"
-        run: tar cfz $ARCHIVED_ARTIFACTS build deploy appspec.yml
-
-      - name: "[S3 Upload] Upload artifacts to S3 bucket"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: "[Info] Get image tag(verion)"
+        id: image
         run: |
-          aws s3 cp $ARCHIVED_ARTIFACTS \
-          --region ${{ secrets.AWS_REGION }} \
-          s3://quiz-build-artifacts
+          LAST_COMMIT_SHA=$(git rev-parse --short HEAD)
+
+          echo VERSION=$LAST_COMMIT_SHA
+          echo "version=$LAST_COMMIT_SHA" >> $GITHUB_OUTPUT
+
+      - name: "[Info] Docker Build, tag, and push image to Amazon ECR"
+        id: image-info
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: quiz-app
+          IMAGE_TAG: ${{ steps.image.outputs.version }}
+        run: |
+          echo "name=ecr_repository::$ECR_REPOSITORY"
+          echo "name=image_tag::$IMAGE_TAG"
+          echo "ecr_repository=$ECR_REPOSITORY" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           
       - id: status
         name: "Job status"
@@ -58,6 +53,12 @@ jobs:
         run: |
           echo ${{ job.status }}
           echo "jobstatus=${{ job.status }}" >> $GITHUB_OUTPUT
+          
+    outputs:
+      version: ${{ steps.image.outputs.version }}
+      jobstatus: ${{ steps.status.outputs.jobstatus }}
+      ecr_repository: ${{ steps.image-info.outputs.ecr_repository }}
+      image_tag: ${{ steps.image-info.outputs.image_tag }}
 
 
   slack-notify:
@@ -90,24 +91,61 @@ jobs:
 
 
   deploy:
-    needs: Slack-notify
-    name: "Deploy"
+    needs: [ build, slack-notify ]
+    name: "Update K8s manifests"
 
     runs-on: ubuntu-latest
     steps:
-      - name: "Configure AWS credentials"
+      - name: "Checkout Source Control"
+        uses: actions/checkout@v3
+
+      - name: "Setup Kustomize"
+        uses: imranismail/setup-kustomize@v1
+
+      - name: "[Info] Configure AWS credentials"
         uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: "[Deploy] Deploy using AWS CodeDeploy"
-        run: aws deploy create-deployment 
-          --application-name quiz-app 
-          --deployment-group-name quiz-prod-deploy-group-test 
-          --deployment-config-name CodeDeployDefault.OneAtATime 
-          --s3-location bucket=quiz-build-artifacts,bundleType=tgz,key=$ARCHIVED_ARTIFACTS
+      - name: "[Info] Login to Amazon ECR"
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # AWS CLI credential helper
+      # https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-https-unixes.html
+      - name: "[Info] Checkout GitOps Repository (CodeCommit)"
+        env:
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          aws --version
+          aws codecommit get-repository --repository-name $REPOSITORY_NAME --region ${{ secrets.AWS_REGION }}
+          git config --global credential.helper '!aws codecommit credential-helper $@'
+          git config --global credential.UseHttpPath true
+          git clone https://git-codecommit.${{ secrets.AWS_REGION }}.amazonaws.com/v1/repos/$REPOSITORY_NAME
+
+      - name: "[Info] Update Kubernetes resources"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          echo ${{ steps.login-ecr.outputs.registry }}
+          echo ${{ needs.build.outputs.ecr_repository }}
+          echo ${{ needs.build.outputs.image_tag }}
+          cd $REPOSITORY_NAME/overlays/prod
+          kustomize edit set image ${{ steps.login-ecr.outputs.registry }}/${{ needs.build.outputs.ecr_repository }}:${{ needs.build.outputs.image_tag }}
+          cat kustomization.yaml
+
+      - name: "[Info] Git Commit and Push to GitOps repository"
+        env:
+          REPOSITORY_NAME: k8s-gitops-quiz-app
+        run: |
+          cd $REPOSITORY_NAME
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "github-actions"
+          git commit -am "Update image tag from GitHub Actions"
+          git push -u origin master
 
 
   jira-notify:
@@ -141,3 +179,4 @@ jobs:
           jira_instance: shlee-mz
           client_id: ${{ secrets.JIRA_CLIENT_ID }}
           client_secret: ${{ secrets.JIRA_CLIENT_SECRET }}
+          

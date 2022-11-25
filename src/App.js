@@ -153,12 +153,7 @@ function App() {
                     {renderError()}
                     <Answers />
 
-		    {/* Original code:
                     <button className="btn btn-primary" onClick={next}>
-		    */}
-
-		    {/* Test code: */}
-                    <button className="btn btn-primary" onClick={() => { alert('>>>>> 버그 발생 <<<<<'); }}>
                         Confirm and Continue
                     </button>
                 </div>
